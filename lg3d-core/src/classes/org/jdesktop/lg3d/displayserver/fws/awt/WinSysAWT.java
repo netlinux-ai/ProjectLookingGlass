@@ -55,6 +55,9 @@ import javax.swing.SwingUtilities;
  * @author  paulby
  */
 public class WinSysAWT extends FoundationWinSys {
+
+    private final java.util.concurrent.CopyOnWriteArrayList<org.jdesktop.lg3d.displayserver.fws.CursorImageListener> cursorImageListeners =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
     
     private static PickEngineAWT pickEngine;
 
@@ -321,7 +324,9 @@ public class WinSysAWT extends FoundationWinSys {
      * @see #getCursorImageListeners
      */
     public void addCursorImageListener(org.jdesktop.lg3d.displayserver.fws.CursorImageListener l) {
-        throw new RuntimeException("Not Implemented");
+        // No cursor-image events are produced in AWT mode, so just track the
+        // listener (the scene manager registers one at start-up in compositor mode).
+        if (l != null) cursorImageListeners.addIfAbsent(l);
     }
     
     /**
@@ -331,7 +336,7 @@ public class WinSysAWT extends FoundationWinSys {
      * @see #removeCursorImageListeners
      */
     public org.jdesktop.lg3d.displayserver.fws.CursorImageListener[] getCursorImageListeners() {
-        throw new RuntimeException("Not Implemented");
+        return cursorImageListeners.toArray(new org.jdesktop.lg3d.displayserver.fws.CursorImageListener[0]);
     }
     
     /**
@@ -350,7 +355,7 @@ public class WinSysAWT extends FoundationWinSys {
      * @see #getCursorImageListeners
      */
     public void removeCursorImageListener(org.jdesktop.lg3d.displayserver.fws.CursorImageListener l) {
-        throw new RuntimeException("Not Implemented");
+        cursorImageListeners.remove(l);
     }
     
     /**
