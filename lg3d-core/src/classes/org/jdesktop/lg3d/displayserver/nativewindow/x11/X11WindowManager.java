@@ -138,6 +138,9 @@ final class X11WindowManager extends Application
 	display.ignore_error(gnu.x11.Error.BAD_DRAWABLE);
 	display.ignore_error(gnu.x11.Error.BAD_MATCH);
 	display.ignore_error(gnu.x11.Error.BAD_ATOM);
+	// Composite window pixmaps race with unmap/resize/destroy; a stale pixmap id
+	// must not kill the Escher reader thread (async errors are otherwise fatal).
+	display.ignore_error(gnu.x11.Error.BAD_PIXMAP);
 	X11WindowManagerHints.initX11WindowManagerHint(display);
 	
 	//display.debug_mode = true;
@@ -284,7 +287,12 @@ final class X11WindowManager extends Application
     public void run() {
 	while (!exit_now) {
 	    try {
-		readAndDispatchEvent();
+		if (!readAndDispatchEvent()) {
+		    // next_event() returns null once the Escher reader has stopped
+		    // (connection lost or fatal X error); don't spin on it.
+		    logger.severe("X connection lost; X11 window manager stopping");
+		    break;
+		}
 	    } catch (Throwable t) {
 		// FIXME -- how to deal with this situation?
 		logger.log(Level.WARNING, 
@@ -299,10 +307,14 @@ final class X11WindowManager extends Application
 	display.bell(-50);
     }
 
-    private void readAndDispatchEvent() {
+    private boolean readAndDispatchEvent() {
 	Event firstEvent = display.next_event();
+	if (firstEvent == null) {
+	    return false;
+	}
 	dispatch(firstEvent);    
 	display.flush();
+	return true;
     }
 
     private void dispatch(Event event) {
