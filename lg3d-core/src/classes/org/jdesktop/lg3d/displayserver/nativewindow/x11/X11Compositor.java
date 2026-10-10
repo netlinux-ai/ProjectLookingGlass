@@ -229,10 +229,14 @@ public class X11Compositor {
      * paints the redirected content back (or lg3d's Canvas3D covers it).
      */
     private void redirectSubwindows() {
-        composite.redirectSubwindows(root, X11CompositeExt.REDIRECT_AUTOMATIC);
+        // Deliberately NOT RedirectSubwindows(root, ...): that would also redirect
+        // lg3d's own Canvas3D window (which cannot be excluded), and with Automatic
+        // updates the server would keep painting every client window on screen on
+        // top of the 3D scene. Each managed client window is instead redirected
+        // individually, in Manual mode, in setupDamageForWindow().
         display.flush();
         display.check_error();
-        logger.fine("CompositeRedirectSubwindows(root, Automatic) issued");
+        logger.fine("Composite: per-window manual redirection (no root-wide redirect)");
     }
 
     /**
@@ -300,6 +304,8 @@ public class X11Compositor {
 
         // Obtain the Composite offscreen pixmap for this window.
         try {
+            // Manual: the server stops painting this window on screen; lg3d draws it.
+            composite.redirectWindow(w, X11CompositeExt.REDIRECT_MANUAL);
             int pixmapId = display.allocate_id(composite);
             composite.nameWindowPixmap(w, new gnu.x11.Pixmap(pixmapId));
             pixmapMap.put(windowId, pixmapId);
@@ -334,7 +340,15 @@ public class X11Compositor {
                     + Integer.toHexString(windowId) + ": " + e);
             }
         }
-        pixmapMap.remove(windowId);
+        if (pixmapMap.remove(windowId) != null) {
+            try {
+                composite.unredirectWindow(new Window(display, windowId),
+                    X11CompositeExt.REDIRECT_MANUAL);
+            } catch (gnu.x11.Error e) {
+                logger.fine("UnredirectWindow failed for 0x"
+                    + Integer.toHexString(windowId) + ": " + e);
+            }
+        }
         damageListeners.remove(windowId);
     }
 
@@ -406,13 +420,8 @@ public class X11Compositor {
         w.change_property(Window.REPLACE, 1, netWmWindowType, Atom.ATOM, 32,
             new int[] { desktop.id }, 0, 32);
 
-        // 3. Keep drawing straight to the screen (undo RedirectSubwindows).
-        try {
-            composite.unredirectWindow(w, X11CompositeExt.REDIRECT_AUTOMATIC);
-        } catch (gnu.x11.Error e) {
-            logger.log(Level.WARNING, "UnredirectWindow failed for own window 0x"
-                + Integer.toHexString(windowId), e);
-        }
+        // 3. Keep drawing straight to the screen: nothing to undo, because only
+        //    managed client windows are redirected (see redirectSubwindows()).
 
         display.flush();
         display.check_error();
@@ -694,6 +703,14 @@ public class X11Compositor {
         // (or keep routing native windows through) a tearing-down compositor.
         X11CompositorSession.clear();
 
+        // Unredirect every window we redirected: they resume drawing to the screen.
+        for (Integer wid : pixmapMap.keySet()) {
+            try {
+                composite.unredirectWindow(new Window(display, wid),
+                    X11CompositeExt.REDIRECT_MANUAL);
+            } catch (gnu.x11.Error ignored) {}
+        }
+
         // Destroy all Damage objects.
         for (Map.Entry<Integer, Integer> entry : damageMap.entrySet()) {
             try {
@@ -704,13 +721,7 @@ public class X11Compositor {
         pixmapMap.clear();
         damageListeners.clear();
 
-        // Unredirect: windows resume drawing directly to the screen.
-        try {
-            composite.unredirectSubwindows(root, X11CompositeExt.REDIRECT_AUTOMATIC);
-            display.flush();
-        } catch (gnu.x11.Error e) {
-            logger.log(Level.WARNING, "UnredirectSubwindows failed", e);
-        }
+        display.flush();
         session.onEvent(SessionLifecycle.Event.SHUTDOWN_COMPLETE);
     }
 }
