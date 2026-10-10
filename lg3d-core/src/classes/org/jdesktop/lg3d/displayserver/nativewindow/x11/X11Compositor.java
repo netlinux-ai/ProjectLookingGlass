@@ -99,6 +99,14 @@ public class X11Compositor {
     private final ConcurrentHashMap<Integer, Integer> pixmapMap = new ConcurrentHashMap<>();
 
     /**
+     * Title of lg3d's own top-level AWT window (the Canvas3D host), learned in
+     * {@link #exemptOwnWindow()}. Used to recognise that window on the X side
+     * when the AWT peer's native id cannot be read (JDK 21 removed
+     * {@code Component.getPeer()}), so it is never redirected offscreen.
+     */
+    private volatile String ownWindowTitle;
+
+    /**
      * Per-window listeners notified when the server reports damage. The
      * Stage 4 window-manager wiring registers a listener per managed window
      * that drives its {@link CompositeWindowImageLoader}.
@@ -302,6 +310,13 @@ public class X11Compositor {
 
         Window w = new Window(display, windowId);
 
+        // Never redirect lg3d's own window: it must keep drawing to the screen.
+        if (isOwnWindow(w)) {
+            logger.fine("Not redirecting lg3d's own window 0x"
+                + Integer.toHexString(windowId));
+            return;
+        }
+
         // Obtain the Composite offscreen pixmap for this window.
         try {
             // Manual: the server stops painting this window on screen; lg3d draws it.
@@ -467,6 +482,9 @@ public class X11Compositor {
         }
         if (wid > 0L) {
             markOwnWindowAsDesktop((int) wid);
+        } else if (ownWindowTitle != null && !ownWindowTitle.trim().isEmpty()) {
+            logger.info("lg3d's own window id not known yet; will recognise it by title '"
+                + ownWindowTitle + "' when it is mapped");
         } else {
             logger.warning("Could not determine lg3d's own X window id; the "
                 + "Canvas3D window may be redirected offscreen (black screen). "
@@ -480,7 +498,7 @@ public class X11Compositor {
      * Walks from the Canvas3D up to its top-level AWT window and reads the
      * native X window id from the platform peer. Returns -1 if unavailable.
      */
-    private static long discoverOwnWindowId() {
+    private long discoverOwnWindowId() {
         try {
             FoundationWinSys fws = FoundationWinSys.getFoundationWinSys();
             if (fws == null) {
@@ -494,11 +512,52 @@ public class X11Compositor {
             if (c == null) {
                 return -1L;
             }
-            return readNativeWindowId(c);
+            ownWindowTitle = titleOf(c);
+            long id = readNativeWindowId(c);
+            return id > 0L ? id : findOwnWindowByTitle();
         } catch (Throwable t) {
             logger.log(Level.FINE, "own-window discovery failed", t);
             return -1L;
         }
+    }
+
+    private static String titleOf(java.awt.Component c) {
+        if (c instanceof java.awt.Frame) {
+            return ((java.awt.Frame) c).getTitle();
+        }
+        if (c instanceof java.awt.Dialog) {
+            return ((java.awt.Dialog) c).getTitle();
+        }
+        return null;
+    }
+
+    /** True if {@code w} is lg3d's own Canvas3D window (matched by title). */
+    private boolean isOwnWindow(Window w) {
+        String t = ownWindowTitle;
+        if (t == null || t.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            return t.equals(w.wm_name());
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** Scans the root's children for the window carrying lg3d's own title. */
+    private long findOwnWindowByTitle() {
+        try {
+            gnu.x11.Enum children = root.tree().children();
+            while (children.more()) {
+                Window w = (Window) children.next();
+                if (isOwnWindow(w)) {
+                    return w.id;
+                }
+            }
+        } catch (Throwable t) {
+            logger.log(Level.FINE, "own-window lookup by title failed", t);
+        }
+        return -1L;
     }
 
     /**
