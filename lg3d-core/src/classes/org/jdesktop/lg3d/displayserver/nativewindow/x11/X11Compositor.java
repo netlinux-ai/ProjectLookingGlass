@@ -435,8 +435,10 @@ public class X11Compositor {
         w.change_property(Window.REPLACE, 1, netWmWindowType, Atom.ATOM, 32,
             new int[] { desktop.id }, 0, 32);
 
-        // 3. Keep drawing straight to the screen: nothing to undo, because only
-        //    managed client windows are redirected (see redirectSubwindows()).
+        // 3. Keep drawing straight to the screen. The window may already have
+        //    been redirected (and Damage-tracked) if it was mapped before its
+        //    identity was known, so undo that; a no-op if it was never tracked.
+        teardownDamageForWindow(windowId);
 
         display.flush();
         display.check_error();
